@@ -11,15 +11,13 @@ import os
 import numpy as np
 import pytest
 
-import eta.core.data as etad
-import eta.core.geometry as etag
 import eta.core.image as etai
-import eta.core.objects as etao
 import eta.core.utils as etau
 
 import fiftyone as fo
 import fiftyone.core.dataset as fod
 import fiftyone.utils.data as foud
+import fiftyone.zoo as foz
 
 
 @pytest.fixture
@@ -110,28 +108,27 @@ def _make_image_labels_dataset(
         )
         etai.write(img, filepath)
 
-        image_labels = etai.ImageLabels()
+        sample = fo.Sample(filepath=filepath)
 
-        _label = random.choice(["sun", "rain", "snow"])
-        image_labels.add_attribute(etad.CategoricalAttribute("label", _label))
+        label = random.choice(["sun", "rain", "snow"])
+        sample["gt_weather"] = fo.Classification(label=label)
 
+        detections = []
         for _ in range(num_objects_per_sample):
-            _label = random.choice(["cat", "dog", "bird", "rabbit"])
-            _xtl = 0.8 * random.random()
-            _ytl = 0.8 * random.random()
-            _bounding_box = etag.BoundingBox.from_coords(
-                _xtl, _ytl, _xtl + 0.2, _ytl + 0.2
-            )
-            image_labels.add_object(
-                etao.DetectedObject(label=_label, bounding_box=_bounding_box)
+            label = random.choice(["cat", "dog", "bird", "rabbit"])
+            bounding_box = [
+                0.8 * random.random(),
+                0.8 * random.random(),
+                0.2,
+                0.2,
+            ]
+            detections.append(
+                fo.Detection(label=label, bounding_box=bounding_box)
             )
 
-        samples.append(
-            fo.Sample(
-                filepath=filepath,
-                ground_truth=fo.ImageLabels(labels=image_labels),
-            )
-        )
+        sample["gt_objects"] = fo.Detections(detections=detections)
+
+        samples.append(sample)
 
     dataset = fo.Dataset()
     dataset.add_samples(samples)
@@ -238,6 +235,36 @@ def _make_multilabel_dataset(img, images_dir):
     return dataset
 
 
+def _run_custom_imports(
+    sample_collection,
+    export_dir,
+    dataset_type,
+    num_unlabeled=None,
+    max_samples=None,
+    **kwargs
+):
+    # Generate a temporary export
+    sample_collection.export(
+        export_dir=export_dir, dataset_type=dataset_type, **kwargs
+    )
+
+    # Test `skip_unlabeled` when importing
+    if num_unlabeled is not None:
+        _dataset = fo.Dataset.from_dir(
+            export_dir, dataset_type, skip_unlabeled=True
+        )
+        assert len(_dataset) == len(sample_collection) - num_unlabeled
+
+    # Test `shuffle` and `max_samples` when importing
+    if max_samples is not None:
+        _dataset = fo.Dataset.from_dir(
+            export_dir, dataset_type, shuffle=True, max_samples=max_samples
+        )
+        assert len(_dataset) == max_samples
+        for s in _dataset:
+            print(s.filepath)
+
+
 def test_classification_datasets(basedir, img):
     # Create a classification dataset
     images_dir = os.path.join(basedir, "source-images")
@@ -298,6 +325,12 @@ def test_detection_datasets(basedir, img):
     # KITTIDetectionDataset
     export_dir = os.path.join(basedir, "kitti-detection")
     dataset_type = fo.types.KITTIDetectionDataset
+    dataset.export(export_dir, dataset_type=dataset_type)
+    dataset2 = fo.Dataset.from_dir(export_dir, dataset_type)
+
+    # YOLODataset
+    export_dir = os.path.join(basedir, "yolo")
+    dataset_type = fo.types.YOLODataset
     dataset.export(export_dir, dataset_type=dataset_type)
     dataset2 = fo.Dataset.from_dir(export_dir, dataset_type)
 
@@ -395,12 +428,6 @@ def test_multilabel_dataset(basedir, multilabel_img):
     images_dir = os.path.join(basedir, "source-images")
     dataset = _make_multilabel_dataset(multilabel_img, images_dir)
 
-    # Test condense
-    foud.condense_image_labels_field(dataset, "ground_truth", prefix="gt_")
-
-    # Test expand
-    foud.expand_image_labels_field(dataset, "ground_truth", prefix="gt_")
-
     # Multilabel BDDDataset
     export_dir = os.path.join(basedir, "bdd")
     dataset.export(
@@ -409,7 +436,7 @@ def test_multilabel_dataset(basedir, multilabel_img):
         label_prefix="gt_",
     )
     dataset2 = fo.Dataset.from_dir(
-        export_dir, fo.types.BDDDataset, expand=True, prefix="gt_"
+        export_dir, fo.types.BDDDataset, label_field="gt"
     )
 
     # Multilabel FiftyOneImageLabelsDataset
@@ -420,10 +447,7 @@ def test_multilabel_dataset(basedir, multilabel_img):
         label_prefix="gt_",
     )
     dataset3 = fo.Dataset.from_dir(
-        export_dir,
-        fo.types.FiftyOneImageLabelsDataset,
-        expand=True,
-        prefix="gt_",
+        export_dir, fo.types.FiftyOneImageLabelsDataset, label_field="gt",
     )
 
 
@@ -459,7 +483,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d1 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # ImageClassificationDirectoryTree
     export_dir = os.path.join(basedir, "ImageClassificationDirectoryTree")
@@ -467,7 +491,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d2 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # TFImageClassificationDataset
     export_dir = os.path.join(basedir, "TFImageClassificationDataset")
@@ -478,7 +502,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d3 = fo.Dataset.from_dir(export_dir, dataset_type, images_dir=images_dir)
+    fo.Dataset.from_dir(export_dir, dataset_type, images_dir=images_dir)
 
     # FiftyOneImageDetectionDataset
     export_dir = os.path.join(basedir, "FiftyOneImageDetectionDataset")
@@ -486,7 +510,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d4 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # COCODetectionDataset
     export_dir = os.path.join(basedir, "COCODetectionDataset")
@@ -494,7 +518,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d5 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # VOCDetectionDataset
     export_dir = os.path.join(basedir, "VOCDetectionDataset")
@@ -502,7 +526,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d6 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # KITTIDetectionDataset
     export_dir = os.path.join(basedir, "KITTIDetectionDataset")
@@ -510,7 +534,15 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d7 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
+
+    # YOLODataset
+    export_dir = os.path.join(basedir, "YOLODataset")
+    dataset_type = fo.types.YOLODataset
+    dataset.export(
+        export_dir, label_field="ground_truth", dataset_type=dataset_type
+    )
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # TFObjectDetectionDataset
     export_dir = os.path.join(basedir, "TFObjectDetectionDataset")
@@ -521,7 +553,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d8 = fo.Dataset.from_dir(export_dir, dataset_type, images_dir=images_dir)
+    fo.Dataset.from_dir(export_dir, dataset_type, images_dir=images_dir)
 
     # CVATImageDataset
     export_dir = os.path.join(basedir, "CVATImageDataset")
@@ -529,7 +561,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d9 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # FiftyOneImageLabelsDataset
     export_dir = os.path.join(basedir, "FiftyOneImageLabelsDataset")
@@ -537,7 +569,7 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d10 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # BDDDataset
     export_dir = os.path.join(basedir, "BDDDataset")
@@ -545,13 +577,177 @@ def test_labeled_datasets_with_no_labels(basedir, img):
     dataset.export(
         export_dir, label_field="ground_truth", dataset_type=dataset_type
     )
-    d11 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
 
     # FiftyOneDataset
     export_dir = os.path.join(basedir, "FiftyOneDataset")
     dataset_type = fo.types.FiftyOneDataset
     dataset.export(export_dir, dataset_type=dataset_type)
-    d12 = fo.Dataset.from_dir(export_dir, dataset_type)
+    fo.Dataset.from_dir(export_dir, dataset_type)
+
+
+def test_custom_unlabeled_image_dataset_imports(basedir):
+    # Types of unlabeled image datasets to test
+    dataset_types = [
+        fo.types.ImageDirectory,
+    ]
+
+    # Load a small unlabeled image dataset
+    udataset = foz.load_zoo_dataset(
+        "cifar10",
+        split="test",
+        dataset_name="unlabeled-dataset",
+        shuffle=True,
+        max_samples=100,
+    )
+    udataset.delete_sample_field("ground_truth")
+
+    # Test custom imports
+    for dataset_type in dataset_types:
+        print(dataset_type.__name__)
+        export_dir = os.path.join(
+            basedir, "custom-imports", dataset_type.__name__
+        )
+        _run_custom_imports(udataset, export_dir, dataset_type, max_samples=3)
+
+
+def test_custom_classification_dataset_imports(basedir):
+    # Types of classification datasets to test
+    dataset_types = [
+        fo.types.FiftyOneImageClassificationDataset,
+        fo.types.ImageClassificationDirectoryTree,
+        fo.types.TFImageClassificationDataset,
+    ]
+
+    # Load a small classification dataset
+    cdataset = foz.load_zoo_dataset(
+        "cifar10",
+        split="test",
+        dataset_name="classification-dataset",
+        shuffle=True,
+        max_samples=100,
+    )
+
+    # Remove labeles from some samples
+    for s in cdataset.take(10):
+        s.ground_truth = None
+        s.save()
+
+    # Test custom imports
+    for dataset_type in dataset_types:
+        print(dataset_type.__name__)
+        export_dir = os.path.join(
+            basedir, "custom-imports", dataset_type.__name__
+        )
+        _run_custom_imports(
+            cdataset, export_dir, dataset_type, num_unlabeled=10, max_samples=3
+        )
+
+
+def test_custom_detection_dataset_imports(basedir):
+    # Types of detection datasets to test
+    dataset_types = [
+        fo.types.FiftyOneImageDetectionDataset,
+        fo.types.COCODetectionDataset,
+        fo.types.VOCDetectionDataset,
+        fo.types.KITTIDetectionDataset,
+        fo.types.YOLODataset,
+        fo.types.TFObjectDetectionDataset,
+        fo.types.CVATImageDataset,
+    ]
+
+    # Load a small detection dataset
+    ddataset = foz.load_zoo_dataset(
+        "coco-2017",
+        split="validation",
+        dataset_name="detection-dataset",
+        shuffle=True,
+        max_samples=100,
+    )
+
+    # Remove labeles from some samples
+    for s in ddataset.take(10):
+        s.ground_truth = None
+        s.save()
+
+    # Test custom imports
+    for dataset_type in dataset_types:
+        print(dataset_type.__name__)
+
+        # COCODetectionDataset and TFObjectDetectionDataset formats cannot
+        # distinguish between an unlabeled image and a labeled image with zero
+        # detections
+        num_unlabeled = 10
+        if dataset_type in (
+            fo.types.COCODetectionDataset,
+            fo.types.TFObjectDetectionDataset,
+        ):
+            num_unlabeled = None
+
+        export_dir = os.path.join(
+            basedir, "custom-imports", dataset_type.__name__
+        )
+        _run_custom_imports(
+            ddataset,
+            export_dir,
+            dataset_type,
+            num_unlabeled=num_unlabeled,
+            max_samples=3,
+        )
+
+
+def test_custom_multitask_image_dataset_imports(basedir):
+    # Types of multitask datasets to test
+    dataset_types = [
+        fo.types.FiftyOneImageLabelsDataset,
+        fo.types.BDDDataset,
+    ]
+
+    # Load a small multitask image dataset
+    idataset = foz.load_zoo_dataset(
+        "coco-2017",
+        split="validation",
+        dataset_name="image-labels-dataset",
+        shuffle=True,
+        max_samples=100,
+    )
+
+    # Remove labeles from some samples
+    for s in idataset.take(10):
+        s.ground_truth = None
+        s.save()
+
+    # Test custom imports
+    for dataset_type in dataset_types:
+        print(dataset_type.__name__)
+        export_dir = os.path.join(
+            basedir, "custom-imports", dataset_type.__name__
+        )
+        _run_custom_imports(
+            idataset, export_dir, dataset_type, max_samples=3, label_prefix="",
+        )
+
+
+def test_custom_generic_dataset_imports(basedir):
+    # Types of generic datasets to test
+    dataset_types = [
+        fo.types.FiftyOneDataset,
+    ]
+
+    # Load a small generic dataset
+    gdataset = foz.load_zoo_dataset(
+        "quickstart",
+        dataset_name="generic-dataset",
+        shuffle=True,
+        max_samples=100,
+    )
+
+    for dataset_type in dataset_types:
+        print(dataset_type.__name__)
+        export_dir = os.path.join(
+            basedir, "custom-imports", dataset_type.__name__
+        )
+        _run_custom_imports(gdataset, export_dir, dataset_type, max_samples=3)
 
 
 if __name__ == "__main__":
