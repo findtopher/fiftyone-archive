@@ -150,12 +150,7 @@ async def aggregate_resolver(
     counts = [len(a) for a in aggregations]
     flattened = [item for sublist in aggregations for item in sublist]
 
-    # TODO: stop aggregate resolver from being called for non-existent fields,
-    #  but fail silently for now by just returning empty results
-    try:
-        result = await view._async_aggregate(flattened)
-    except:
-        return []
+    result = await view._async_aggregate(flattened, debug=True)
 
     results = []
     offset = 0

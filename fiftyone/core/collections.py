@@ -9633,7 +9633,7 @@ class SampleCollection(object):
 
         return results[0] if scalar_result else results
 
-    async def _async_aggregate(self, aggregations):
+    async def _async_aggregate(self, aggregations, debug=True):
         if not aggregations:
             return []
 
@@ -9664,22 +9664,30 @@ class SampleCollection(object):
             # Run all aggregations
             coll_name = self._dataset._sample_collection_name
             collection = foo.get_async_db_conn()[coll_name]
-            _results = await foo.aggregate(collection, pipelines)
 
-            # Parse facet-able results
-            for idx, aggregation in compiled_facet_aggs.items():
-                result = list(_results[idx_map[idx]])
-                data = self._parse_faceted_result(aggregation, result)
-                if (
-                    isinstance(aggregation, foa.FacetAggregations)
-                    and aggregation._compiled
-                ):
-                    for idx, d in data.items():
-                        results[idx] = d
-                else:
-                    results[idx] = data
+            try:
+                _results = await foo.aggregate(collection, pipelines)
 
-        return results[0] if scalar_result else results
+                # Parse facet-able results
+                for idx, aggregation in compiled_facet_aggs.items():
+                    result = list(_results[idx_map[idx]])
+                    data = self._parse_faceted_result(aggregation, result)
+                    if (
+                        isinstance(aggregation, foa.FacetAggregations)
+                        and aggregation._compiled
+                    ):
+                        for idx, d in data.items():
+                            results[idx] = d
+                    else:
+                        results[idx] = data
+
+                return results[0] if scalar_result else results
+            except Exception as e:
+                import fiftyone as fo
+
+                if debug:
+                    fo.pprint(pipelines)
+                raise e
 
     def _parse_aggregations(self, aggregations, allow_big=True):
         big_aggs = {}
