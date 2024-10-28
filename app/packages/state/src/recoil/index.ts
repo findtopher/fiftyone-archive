@@ -27,4 +27,5 @@ export * from "./sidebar";
 export * from "./sidebarExpanded";
 export * from "./types";
 export * from "./utils";
+export * from "./version";
 export * from "./view";
