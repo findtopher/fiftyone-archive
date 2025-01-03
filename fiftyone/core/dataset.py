@@ -3465,7 +3465,13 @@ class Dataset(foc.SampleCollection, metaclass=DatasetSingleton):
         return d
 
     def _bulk_write(
-        self, ops, ids=None, frames=False, ordered=False, progress=False
+        self,
+        ops,
+        ids=None,
+        sample_ids=None,
+        frames=False,
+        ordered=False,
+        progress=False,
     ):
         if frames:
             coll = self._frame_collection
@@ -3475,7 +3481,11 @@ class Dataset(foc.SampleCollection, metaclass=DatasetSingleton):
         foo.bulk_write(ops, coll, ordered=ordered, progress=progress)
 
         if frames:
-            fofr.Frame._reload_docs(self._frame_collection_name, frame_ids=ids)
+            fofr.Frame._reload_docs(
+                self._frame_collection_name,
+                sample_ids=sample_ids,
+                frame_ids=ids,
+            )
         else:
             fos.Sample._reload_docs(
                 self._sample_collection_name, sample_ids=ids
@@ -5076,7 +5086,7 @@ class Dataset(foc.SampleCollection, metaclass=DatasetSingleton):
             self._frame_collection_name, sample_ids=sample_ids
         )
 
-    def _keep_frames(self, view=None, frame_ids=None):
+    def _keep_frames(self, view=None):
         sample_collection = view if view is not None else self
         if not sample_collection._contains_videos(any_slice=True):
             return
@@ -8001,6 +8011,7 @@ class Dataset(foc.SampleCollection, metaclass=DatasetSingleton):
         """Reloads the dataset and any in-memory samples from the database."""
         self._reload(hard=True)
         self._reload_docs(hard=True)
+        self._reload_docs(frames=True, hard=True)
 
     def clear_cache(self):
         """Clears the dataset's in-memory cache.
@@ -8042,11 +8053,18 @@ class Dataset(foc.SampleCollection, metaclass=DatasetSingleton):
 
         self._update_last_loaded_at()
 
-    def _reload_docs(self, hard=False):
-        fos.Sample._reload_docs(self._sample_collection_name, hard=hard)
+    def _reload_docs(self, ids=None, frames=False, hard=False):
+        if frames:
+            if not self._has_frame_fields():
+                return
 
-        if self._has_frame_fields():
-            fofr.Frame._reload_docs(self._frame_collection_name, hard=hard)
+            fofr.Frame._reload_docs(
+                self._frame_collection_name, frame_ids=ids, hard=hard
+            )
+        else:
+            fos.Sample._reload_docs(
+                self._sample_collection_name, sample_ids=ids, hard=hard
+            )
 
     def _serialize(self):
         return self._doc.to_dict(extended=True)
